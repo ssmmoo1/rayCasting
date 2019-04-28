@@ -59,17 +59,30 @@
 #include "Sound.h"
 #include "Timer0.h"
 #include "Timer1.h"
+#include "math.h"
 
 void DisableInterrupts(void); // Disable interrupts
 void EnableInterrupts(void);  // Enable interrupts
 void Delay100ms(uint32_t count); // time delay in 0.1 seconds
-
+#define PF1       (*((volatile uint32_t *)0x40025008))
+#define PF2       (*((volatile uint32_t *)0x40025010))
+#define PF3       (*((volatile uint32_t *)0x40025020))
+// Initialize Port F so PF1, PF2 and PF3 are heartbeats
+void PortF_Init(void){
+	SYSCTL_RCGCGPIO_R |= 0x20;
+	while((SYSCTL_RCGCGPIO_R & 0x20) == 0){};
+	GPIO_PORTF_DIR_R |= 0x0E;
+	GPIO_PORTF_DEN_R |= 0x0E;
+}
 
 int main1(void){
   PLL_Init(Bus80MHz);       // Bus clock is 80 MHz 
   Random_Init(1);
 
   Output_Init();
+	
+	
+	
   ST7735_FillScreen(0x0000);            // set screen to black
   
   ST7735_DrawBitmap(52, 159, ns, 18,8); // player ship middle bottom
@@ -210,11 +223,12 @@ void drawCastTexture(int16_t x, int16_t y, int16_t h, uint16_t colorC, uint16_t 
 
 void scaleTexture(int32_t height, int32_t row)
 {
+
   uint32_t i = 0;
 	uint32_t j = 0;
 	uint32_t inc = (64 << 10) / height;
 	uint32_t texY;
-	while(j < height)
+	while(j < 127)
 	{
 		texY = i >> 10;
 		
@@ -333,7 +347,47 @@ void scaleTexture(int32_t height, int32_t row)
 //}
 	
 	
+typedef struct 
+{
+	int32_t x;
+	int32_t y;
+	uint16_t *texture;
 	
+	uint16_t angleToP;
+	uint16_t distToD;	
+}sprite;
+
+void calcSpDist(int32_t px, int32_t py, sprite sp)
+{
+	int32_t temp1 = px - sp.x;
+	int32_t temp2 = py - sp.y;
+	
+	if(temp1 < 0)
+		temp1*=-1;
+	if(temp2 < 0)
+		temp2 *= -1;
+	
+	sp.distToD = (int) sqrt(   pow(temp1 , 2)  + pow(temp1,2) );                     
+	
+}
+
+void calcAngleSp(int32_t px, int32_t py, sprite sp)
+{
+	double rads = atan2(sp.y - py, sp.x - px);
+	int32_t deg;
+	
+	rads = rads * 180 / 3.1415962;
+	deg = (int) rads;
+	deg *=-1;
+	
+	if(deg < 0)
+	{
+		deg += 360;
+	}
+	
+	sp.angleToP = deg;
+	
+}
 
 
 	
@@ -432,11 +486,62 @@ uint8_t checkCollision(int32_t x1, int32_t y1, int32_t x2, int32_t y2)
 		nextY = nextY >> 6;
 		
 		if( grid[nextX] [nextY] == 1)
-			return 1;
+			return 0;
 		return 1;
 		
 		
 	}
+	
+	
+	
+	
+uint8_t checkPoint(int32_t x1, int32_t x2, int32_t y1, int32_t y2, int32_t xStep, int32_t yStep)
+{
+	
+
+	
+	
+	
+	
+	
+	
+	
+	
+	int32_t tempx1= x1 - xStep;
+	int32_t spXStep = x1 - x2;
+	
+	
+	
+	int32_t spYStep = y1 - y2;
+	
+	int32_t xStep8 = xStep << 8;
+
+	
+	int32_t spXStep8 = spXStep << 8;
+
+	int32_t slopeWall =  xStep8 / yStep;
+	int32_t slopeSprite = spXStep8 / spYStep;
+	
+	int32_t boundLow = slopeWall - (slopeWall /10);
+	int32_t boundUp = slopeWall + (slopeWall /10);
+	
+	if( slopeSprite > boundLow && slopeSprite < boundUp ) 
+	{
+		
+		return 1;
+		
+	}
+	
+	return 0;
+
+
+
+}	
+	
+sprite chestObj = {255,325};
+	
+
+
 
 int main(void)
 {
@@ -447,7 +552,8 @@ int main(void)
 	EnableInterrupts();
 	SysTick_Init();
 	Output_Init();
-	
+	PortF_Init();
+	//ST7735_SetRotation(2);
 	SYSCTL_RCGCGPIO_R |= 0x02;        // 1) activate clock for Port B
   while((SYSCTL_PRGPIO_R&0x02)==0){}; // allow time for clock to start
                        
@@ -480,7 +586,7 @@ int main(void)
 	const int32_t grid_w = 64;
 
 	//int playerH = 32;
-	int32_t playerPos[2] ={244, 94};
+	int32_t playerPos[2] ={200, 200};
 	int32_t view_angle = 137;
 	
 	const int32_t projection_plane[] = {width, height};
@@ -531,11 +637,17 @@ int main(void)
 	int32_t tCount;
 	int32_t j = 0;
 	
+	
+	int8_t drawChest = 0;
+  int8_t gotY = 0;
+	
+	
 	//Start main loop
 	while(1)
 	{
 		NVIC_ST_CURRENT_R = 0;
-		
+		drawChest = 0;
+		gotY = 0;
 		
 		//Handle control input to move player
 		if( (GPIO_PORTB_DATA_R & 0x01) != 0)
@@ -588,6 +700,11 @@ int main(void)
 		
 		
 		rayAngle = view_angle + 32;
+		
+//		if(chestObj.angleToP - 500 < rayAngle - 500 && chestObj.angleToP - 500 > rayAngle - 32 -500)
+//			chestObj.inView = 1;
+//		else
+//			chestObj.inView = 0;
 		
 		//Start raycasting. Loop through width of the screen to calculate and draw each line
 		for(i = 0; i < width; i+=resolution)
@@ -658,8 +775,11 @@ int main(void)
 			x_step = ((grid_h * tanRayTableDiv12[rayAngle]) >> 12) * tx;
 
       y_step = grid_h * signed_y;
-      rayPos[0] = ray_y >> 6; 
-			rayPos[1] = ray_x >> 6;
+      rayPos[0] = ray_x >> 6; 
+			rayPos[1] = ray_y >> 6;
+			
+			
+			
 			
 			
 			
@@ -679,8 +799,8 @@ int main(void)
 					{
 						ray_x += x_step;
 						ray_y += y_step;
-						rayPos[0] = ray_y >> 6;
-						rayPos[1] = ray_x >> 6;
+						rayPos[0] = ray_x >> 6;
+						rayPos[1] = ray_y >> 6;
 						
 					}
 					
@@ -708,10 +828,11 @@ int main(void)
 			y_step = ((grid_w * tanRayTableTim12[rayAngle]) >> 12) * ty;
 
       x_step = grid_w * signed_x;
-      rayPos[0] = ray_y >> 6; 
-			rayPos[1] = ray_x >> 6;
+      rayPos[0] = ray_x >> 6; 
+			rayPos[1] = ray_y >> 6;
 			
-			
+		
+		 
 			
 			while(1)
 			{
@@ -729,8 +850,8 @@ int main(void)
 					{
 						ray_x += x_step;
 						ray_y += y_step;
-						rayPos[0] = ray_y >> 6;
-						rayPos[1] = ray_x >> 6;
+						rayPos[0] = ray_x >> 6;
+						rayPos[1] = ray_y >> 6;
 						
 					}
 					
@@ -798,6 +919,9 @@ int main(void)
 				
 				
 				slice_y =  plane_center - (slice_height >> 1);
+				
+				
+				
 				scaleTexture(slice_height, texturePos);
 				
 			  drawCastTexture(i,  slice_y, slice_height,ceiling, floor);
@@ -813,6 +937,7 @@ int main(void)
 				
 			}
 			
+		
 		}
 		
 		
